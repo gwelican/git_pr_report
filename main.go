@@ -1,7 +1,7 @@
 package main
 
 import (
-	"context"
+	"golang.org/x/net/context"
 	"encoding/csv"
 	"fmt"
 	"github.com/google/go-github/github"
@@ -32,40 +32,15 @@ func (s prArray) Less(i, j int) bool {
 
 var (
 	repos = []string{
-		"gocd-agent-scripts",
-		"gocd-configuration",
-		"auth-api-v2",
-		"orion-service",
-		"account-security-service",
-		"infrastructure-deployment",
-		"account-security-api-v1",
-		"account-security-service-deployment",
-		"ansible-host-ansible-role",
-		"ansible-role-ntp-centos",
-		"ansible-tower-bootstrap",
-		"ansible-tower-install",
-		"api-contract",
-		"api-parent",
-		"api-test",
-		"apigee-ansible-modules",
-		"atlas",
-		"atlas-service-deployment-role",
-		"atlas-service-base-docker-image",
-		"auth-api-v1",
-		"developer-osx",
-		"docker-host-ansible-role",
-		"coreplatform-vm",
-		"environment-setup",
-		"platform-workstream",
-		"coreplatform",
-		"platform-engineering-large-tests",
-		"Platform-Engineering-Area-Handbook",
+		"<<secret>>",
+		"<<secret>>",
 	}
 )
 
 func main() {
 	token := "<<secret>>"
 	githubUrl := "<<secret>>"
+	repoOwner := "<<secret>>"
 
 	oauthStaticToken := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 
@@ -73,39 +48,38 @@ func main() {
 	oauthClient := oauth2.NewClient(ctx, oauthStaticToken)
 
 	client := github.NewClient(oauthClient)
-	url, _ := url.Parse(githubUrl)
-	repoOwner := "Core-Platform"
+	githubBaseUrl, _ := url.Parse(githubUrl)
 
-	client.BaseURL = url
-
-	file, _ := os.Create("result.csv")
-	defer file.Close()
+	client.BaseURL = githubBaseUrl
 
 	writer := csv.NewWriter(os.Stdout)
 	defer writer.Flush()
 
-	for _, r := range repos {
+	for _, repoName := range repos {
 
-		opt := &github.PullRequestListOptions{State: "closed", ListOptions: github.ListOptions{PerPage: 10}}
+		pullRequestListOptions := &github.PullRequestListOptions{State: "closed", ListOptions: github.ListOptions{}}
 
 		var prs prArray
 
-		_, resp, _ := client.PullRequests.List(ctx, repoOwner, r, opt)
+		_, resp, _ := client.PullRequests.List(ctx, repoOwner, repoName, pullRequestListOptions)
 
-		chPr := make(chan github.PullRequest)
+		channelPullRequest := make(chan github.PullRequest)
 		chFinished := make(chan bool)
 
-		for i := 1; i <= resp.LastPage; i++ {
-			go getPageUrl(ctx, client, repoOwner, r, chPr, chFinished, i)
-
+		for prPageNumber := 1; prPageNumber <= resp.LastPage; prPageNumber++ {
+			go getPageUrl(ctx, client, repoOwner, repoName, channelPullRequest, chFinished, prPageNumber)
 		}
 
 		for c := 0; c < resp.LastPage; {
 			select {
-			case pullReq := <-chPr:
-				prs = append(prs, pr{Id: *pullReq.Number, Duration: pullReq.ClosedAt.Sub(*pullReq.CreatedAt), Date: pullReq.CreatedAt.Format("2006-01-02")})
+			case pullReq := <-channelPullRequest:
+				prs = append(prs, pr{
+					Id:       *pullReq.Number,
+					Duration: pullReq.ClosedAt.Sub(*pullReq.CreatedAt),
+					Date:     pullReq.CreatedAt.Format("2006-01-02"),
+				})
 				writer.Write([]string{
-					r,
+					repoName,
 					pullReq.CreatedAt.Format("2006-01-02"),
 					fmt.Sprintf("%f", pullReq.ClosedAt.Sub(*pullReq.CreatedAt).Hours()),
 					*pullReq.User.Login,
@@ -121,14 +95,20 @@ func main() {
 
 }
 
-func getPageUrl(ctx context.Context, client *github.Client, owner, repo string, ch chan github.PullRequest, chFinished chan bool, page int) {
-	opt := &github.PullRequestListOptions{State: "closed", ListOptions: github.ListOptions{PerPage: 10, Page: page}}
+func getPageUrl(ctx context.Context, client *github.Client, repoOwner string, repoName string, channelPullRequest chan github.PullRequest, chFinished chan bool, pullRequestPageNumber int) {
+	opt := &github.PullRequestListOptions{
+		State: "closed",
+		ListOptions: github.ListOptions{
+			PerPage: 10,
+			Page:    pullRequestPageNumber,
+		},
+	}
 
-	pullRequests, _, err := client.PullRequests.List(ctx, owner, repo, opt)
+	pullRequests, _, err := client.PullRequests.List(ctx, repoOwner, repoName, opt)
 
 	if err == nil {
 		for _, pr := range pullRequests {
-			ch <- *pr
+			channelPullRequest <- *pr
 		}
 	}
 	defer func() {
